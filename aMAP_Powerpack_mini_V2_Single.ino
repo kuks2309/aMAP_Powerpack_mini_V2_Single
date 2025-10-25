@@ -8,6 +8,7 @@
 #include <avr/wdt.h> // Watchdog timer library
 #include <semphr.h>
 
+
 // ============================================================================
 // Pin Definitions and Hardware Configuration
 // ============================================================================

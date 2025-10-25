@@ -1,0 +1,18 @@
+# VSCode environment files (session-specific)
+.vscode/colcon.env
+
+# Arduino build files
+build/
+*.hex
+*.elf
+*.map
+
+# IDE files
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
