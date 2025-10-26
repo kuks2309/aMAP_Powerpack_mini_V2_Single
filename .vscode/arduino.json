@@ -1,7 +1,7 @@
 {
-    "port": "COM4",
+    "port": "/dev/ttyACM1",
     "configuration": "cpu=atmega2560",
     "board": "arduino:avr:mega",
     "programmer": "arduino:avrisp",
-    "sketch": "aMAP_Powerpack_mini_V2.ino"
+    "sketch": "aMAP_Powerpack_mini_V2_Single.ino"
 }

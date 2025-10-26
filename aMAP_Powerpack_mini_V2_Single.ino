@@ -1,7 +1,9 @@
 #include "I2CComm.h"
 #include "LS7166.h"
 #include "PIDController.h"
+#include "remote_control.h"
 #include <Arduino_FreeRTOS.h>
+#include <HardwareSerial.h>
 #include <SPI.h>
 #include <Servo.h>
 #include <Wire.h>
@@ -19,7 +21,7 @@
 
 // Servo control pins
 #define SERVO1_PIN 6          // Servo 1 PWM control pin
-#define SERVO1_NEUTRAL 87     // Servo 1 neutral position (degrees)
+#define SERVO1_NEUTRAL 93     // Servo 1 neutral position (degrees)
 #define SERVO1_ANGLE_LIMIT 35 // Servo 1 angle range: ±35 degrees from neutral
 
 // Encoder SPI chip select pins
@@ -39,6 +41,9 @@
 // Speed control frequency: 50Hz (20ms period)
 #define SPEED_CONTROL_FREQ_HZ 50
 #define SPEED_CONTROL_PERIOD_MS (1000 / SPEED_CONTROL_FREQ_HZ)
+
+// RC Control Settings
+#define RC_MAX_PWM 150  // Maximum PWM value from RC control (0-255)
 
 // ============================================================================
 // PID Controller Gains
@@ -88,6 +93,7 @@ typedef struct
 Servo servo1;
 LS7166 encoder(LS7166_CS1, ENCODER1_REVERSE);
 I2CComm i2c;
+RemoteControl* remote_control = nullptr;
 
 // Control structures
 MotorControl motor1_ctrl = {0, 0, 0, 0, 0, 0, 0, MODE_PWM};
@@ -127,15 +133,18 @@ void motor1_speed_control(int speed)
     }
 
     speed = constrain(speed, -255, 255);
+
+    // Apply PWM to motor driver pins
     if (speed > 0)
     {
-        analogWrite(MOTOR1_EN1, speed);
-        analogWrite(MOTOR1_EN2, 0);
+        analogWrite(MOTOR1_EN1, 0);
+        analogWrite(MOTOR1_EN2, speed);
     }
     else if (speed < 0)
     {
-        analogWrite(MOTOR1_EN1, 0);
-        analogWrite(MOTOR1_EN2, abs(speed));
+        analogWrite(MOTOR1_EN1, abs(speed));
+        analogWrite(MOTOR1_EN2, 0);
+        
     }
     else
     {
@@ -223,13 +232,27 @@ void TaskSerialCommunication(void *pvParameters)
         {
             i2c.setMotor1Status(motor1_ctrl.current_position, motor1_ctrl.current_speed, motor1_ctrl.mode);
             status += "Pos=" + String(motor1_ctrl.current_position);
-            status += " Speed=" + String(motor1_ctrl.current_speed);
+            status += " Spd=" + String(motor1_ctrl.current_speed);
             status += " Mode=" + String(motor1_ctrl.mode);
+            status += " PWM=" + String(motor1_ctrl.target_speed);
             xSemaphoreGive(xMotor1Semaphore);
         }
 
         // Add servo position
         status += " | S1=" + String(servo1.read());
+
+        // Add remote control status
+        if (remote_control)
+        {
+            status += " | RC:";
+            status += remote_control->isConnected() ? "OK" : "DISC";
+            status += " Mode=" + String(remote_control->getDriveModeString());
+            if (remote_control->isConnected())
+            {
+                status += " CH0=" + String(remote_control->getChannel(0));
+                status += " CH1=" + String(remote_control->getChannel(1));
+            }
+        }
 
         // Debug output
         if (xSemaphoreTake(xSerialSemaphore, pdMS_TO_TICKS(10)) == pdTRUE)
@@ -327,6 +350,17 @@ void setup()
     // Initialize I2C communication
     initializeI2C();
 
+    // Initialize Remote Control (SBUS on Serial2)
+    // Serial2 is available on Arduino Mega 2560 (pins 16=RX2, 17=TX2)
+    Serial.println("\n=== SBUS Remote Control Initialization ===");
+    Serial.println("Serial2: RX2=pin16, TX2=pin17");
+    Serial.println("Connect SBUS receiver signal to pin 16 (RX2)");
+    remote_control = new RemoteControl(&Serial2);
+    remote_control->begin();
+    Serial.println("SBUS receiver initialized");
+    Serial.println("Drive modes: CH6 controls MANUAL/SEMI_AUTO/FULL_AUTO");
+    Serial.println("==========================================\n");
+
     // Create tasks
     xTaskCreate(TaskMotorControl, "MotorCtrl",
                 128, // Stack size
@@ -348,6 +382,10 @@ void setup()
     Serial.println("    - Position mode: target position (mm)");
     Serial.println("  I2C Servo Control:");
     Serial.println("    - Servo angles (degrees, relative to neutral)");
+    Serial.println("  SBUS Remote Control:");
+    Serial.println("    - MANUAL: RC controls servo and motor");
+    Serial.println("    - SEMI_AUTO: I2C controls servo, RC controls motor");
+    Serial.println("    - FULL_AUTO: I2C controls both");
 
 // Enable watchdog timer (must be last in setup)
 #if WATCHDOG_ENABLE
@@ -360,7 +398,116 @@ void setup()
 
 void loop()
 {
-    // Empty. Things are done in Tasks.
+    // SBUS Remote Control Update (every 100ms = 10Hz)
+    static unsigned long last_sbus_update = 0;
+    const unsigned long SBUS_UPDATE_INTERVAL = 100; // 100ms
+
+    // SBUS parameters
+    const int16_t SBUS_CENTER = 1011;
+    const int16_t SBUS_DEADZONE = 20;
+    const int16_t SBUS_MIN = 200;
+    const int16_t SBUS_MAX = 1800;
+
+    unsigned long current_time = millis();
+
+    if (current_time - last_sbus_update >= SBUS_UPDATE_INTERVAL)
+    {
+        last_sbus_update = current_time;
+
+        // Update remote control
+        if (remote_control)
+        {
+            remote_control->update();
+
+            // Check connection and drive mode
+            if (remote_control->isConnected())
+            {
+                uint8_t drive_mode = remote_control->getDriveMode();
+
+                // Get channel values
+                int16_t ch0 = remote_control->getChannel(0);
+                int16_t ch1 = remote_control->getChannel(1);
+
+                // Apply dead zone to CH1 (throttle)
+                if (abs(ch1 - SBUS_CENTER) < SBUS_DEADZONE)
+                {
+                    ch1 = SBUS_CENTER;
+                }
+
+                if (drive_mode == RC_MODE_MANUAL)
+                {
+                    // MANUAL mode: Control both servo and motor via RC
+                    // CH0 -> Servo steering
+                    int servo_angle = map(ch0, SBUS_MIN, SBUS_MAX, -SERVO1_ANGLE_LIMIT, SERVO1_ANGLE_LIMIT);
+                    servo1.write(SERVO1_NEUTRAL + constrain(servo_angle, -SERVO1_ANGLE_LIMIT, SERVO1_ANGLE_LIMIT));
+
+                    // CH1 -> Motor throttle
+                    int motor_pwm;
+                    if (ch1 < SBUS_CENTER)
+                    {
+                        // Forward: 200-1011 -> RC_MAX_PWM to 0
+                        motor_pwm = map(ch1, SBUS_MIN, SBUS_CENTER, RC_MAX_PWM, 0);
+                    }
+                    else if (ch1 > SBUS_CENTER)
+                    {
+                        // Reverse: 1011-1800 -> 0 to -RC_MAX_PWM
+                        motor_pwm = map(ch1, SBUS_CENTER, SBUS_MAX, 0, -RC_MAX_PWM);
+                    }
+                    else
+                    {
+                        motor_pwm = 0;
+                    }
+
+                    // Set motor PWM (MANUAL mode)
+                    if (xSemaphoreTake(xMotor1Semaphore, pdMS_TO_TICKS(5)) == pdTRUE)
+                    {
+                        motor1_ctrl.mode = MODE_PWM;
+                        motor1_ctrl.target_speed = motor_pwm;
+                        motor1_ctrl.pwm_output = motor_pwm; // Store for debugging
+                        xSemaphoreGive(xMotor1Semaphore);
+                    }
+                }
+                else if (drive_mode == RC_MODE_SEMI_AUTO)
+                {
+                    // SEMI_AUTO mode: Servo via I2C, Motor via RC
+                    // CH1 -> Motor throttle only
+                    int motor_pwm;
+                    if (ch1 < SBUS_CENTER)
+                    {
+                        motor_pwm = map(ch1, SBUS_MIN, SBUS_CENTER, RC_MAX_PWM, 0);
+                    }
+                    else if (ch1 > SBUS_CENTER)
+                    {
+                        motor_pwm = map(ch1, SBUS_CENTER, SBUS_MAX, 0, -RC_MAX_PWM);
+                    }
+                    else
+                    {
+                        motor_pwm = 0;
+                    }
+
+                    // Set motor PWM (SEMI_AUTO mode)
+                    if (xSemaphoreTake(xMotor1Semaphore, pdMS_TO_TICKS(5)) == pdTRUE)
+                    {
+                        motor1_ctrl.mode = MODE_PWM;
+                        motor1_ctrl.target_speed = motor_pwm;
+                        motor1_ctrl.pwm_output = motor_pwm; // Store for debugging
+                        xSemaphoreGive(xMotor1Semaphore);
+                    }
+                }
+                // FULL_AUTO mode: Both servo and motor controlled by I2C (no RC input)
+            }
+            else
+            {
+                // RC disconnected: Stop motor for safety
+                if (xSemaphoreTake(xMotor1Semaphore, pdMS_TO_TICKS(5)) == pdTRUE)
+                {
+                    motor1_ctrl.mode = MODE_PWM;
+                    motor1_ctrl.target_speed = 0;
+                    xSemaphoreGive(xMotor1Semaphore);
+                }
+            }
+        }
+    }
 }
 
 // ============================================================================
