@@ -1,4 +1,4 @@
-#include "I2CComm.h"
+#include "I2CComm_Single.h"
 #include "LS7166.h"
 #include "PIDController.h"
 #include "remote_control.h"
@@ -94,7 +94,7 @@ typedef struct
 // Global objects
 Servo servo1;
 LS7166 encoder(LS7166_CS1, LS7166_CS2, ENCODER1_REVERSE, ENCODER2_REVERSE);
-I2CComm i2c;
+I2CComm_Single i2c;
 RemoteControl* remote_control = nullptr;
 
 // Control structures
@@ -564,8 +564,8 @@ void initializeI2C()
     i2c.begin(I2C_SLAVE_ADDRESS);
     i2c.setMotor1Callback(onMotor1Command);
     i2c.setServo1Callback(onServo1Command);
-    i2c.setResetEncodersCallback(onResetEncodersCommand);
-    Serial.print("I2C initialized at address: 0x");
+    i2c.setResetEncoderCallback(onResetEncodersCommand);
+    Serial.print("I2C initialized (Single Motor) at address: 0x");
     Serial.println(I2C_SLAVE_ADDRESS, HEX);
 }
 
