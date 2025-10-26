@@ -47,11 +47,43 @@ uint8_t LS7166::read_LS7166(uint8_t cs_pin, uint8_t reg) {
 }
 
 void LS7166::init_encoder(uint8_t cs_pin) {
-    // Configure MDR0: 4X quadrature, free running mode (same as working example)
+    // Clear MDR0
     digitalWrite(cs_pin, LOW);
     SPI.transfer(0x88); // Write to MDR0
-    SPI.transfer(0x03); // Configure to 4 byte mode
+    SPI.transfer(0x00); // Clear
     digitalWrite(cs_pin, HIGH);
+    delayMicroseconds(100);
+
+    // Clear MDR1
+    digitalWrite(cs_pin, LOW);
+    SPI.transfer(0x90); // Write to MDR1
+    SPI.transfer(0x00); // Clear
+    digitalWrite(cs_pin, HIGH);
+    delayMicroseconds(100);
+
+    // Configure MDR0: x4 quadrature, free-running, filter clock division = 1
+    // Bit pattern: 0000 0011
+    // [7:6] = 00: non-quadrature mode disabled
+    // [5:4] = 00: free-running count mode
+    // [3:2] = 00: disable index
+    // [1:0] = 11: x4 quadrature count mode
+    digitalWrite(cs_pin, LOW);
+    SPI.transfer(0x88); // Write to MDR0
+    SPI.transfer(0x03); // x4 quadrature mode
+    digitalWrite(cs_pin, HIGH);
+    delayMicroseconds(100);
+
+    // Configure MDR1: 4-byte counter mode, enable counting
+    // Bit pattern: 0000 0000
+    // [7:6] = 00: 4-byte counter mode
+    // [5:4] = 00: normal count mode
+    // [3:2] = 00: no flags
+    // [1:0] = 00: no output control
+    digitalWrite(cs_pin, LOW);
+    SPI.transfer(0x90); // Write to MDR1
+    SPI.transfer(0x00); // 4-byte mode
+    digitalWrite(cs_pin, HIGH);
+    delayMicroseconds(100);
 }
 
 void LS7166::init_encoder1() {

@@ -26,10 +26,12 @@
 
 // Encoder SPI chip select pins
 #define LS7166_CS1 8 // Encoder 1 (Motor 1) CS pin
+#define LS7166_CS2 9 // Encoder 2 (Motor 1) CS pin
 
 // Direction reversal settings
-#define ENCODER1_REVERSE true  // true: reverse encoder direction, false: normal
-#define MOTOR1_REVERSE false   // true: reverse motor direction, false: normal
+#define ENCODER1_REVERSE false  // true: reverse encoder direction, false: normal
+#define ENCODER2_REVERSE true   // true: reverse encoder direction, false: normal
+#define MOTOR1_REVERSE false    // true: reverse motor direction, false: normal
 
 // Encoder calibration (adjust these values for your robot)
 // 1m 당 pulse 수 - 실험 데이터 기반 (20cm 이동 ≈ 2300 펄스)
@@ -91,7 +93,7 @@ typedef struct
 
 // Global objects
 Servo servo1;
-LS7166 encoder(LS7166_CS1, ENCODER1_REVERSE);
+LS7166 encoder(LS7166_CS1, LS7166_CS2, ENCODER1_REVERSE, ENCODER2_REVERSE);
 I2CComm i2c;
 RemoteControl* remote_control = nullptr;
 
@@ -324,10 +326,13 @@ void setup()
 
     // Verify encoder initialization
     int32_t test1 = encoder.read_encoder1();
+    int32_t test2 = encoder.read_encoder2();
     Serial.print("\nEncoder 1 initial value: ");
     Serial.println(test1);
+    Serial.print("Encoder 2 initial value: ");
+    Serial.println(test2);
 
-    if (test1 == -1)
+    if (test1 == -1 || test2 == -1)
     {
         Serial.println("\n!!! WARNING: Encoder returns -1 (0xFFFFFFFF)");
         Serial.println("!!! This indicates SPI communication failure");
@@ -336,8 +341,12 @@ void setup()
         Serial.println("!!!   2. MISO (pin 50) connected to LS7166 DOUT");
         Serial.println("!!!   3. SCK (pin 52) connected to LS7166 CLK");
         Serial.println("!!!   4. CS1 (pin 8) connected to Encoder1 CS");
-        Serial.println("!!!   5. LS7166 power (VCC/GND)");
+        Serial.println("!!!   5. CS2 (pin 9) connected to Encoder2 CS");
+        Serial.println("!!!   6. LS7166 power (VCC/GND)");
     }
+
+    Serial.println("\n*** Please rotate the wheel and observe encoder values ***");
+    Serial.println("If values don't change, check encoder A/B signal connections");
     Serial.println("==============================\n");
 
     // Set integral limits for position control to prevent windup
