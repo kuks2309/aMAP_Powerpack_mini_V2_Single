@@ -585,12 +585,13 @@ void initializeI2C()
 
 void onMotor1Command(uint8_t mode, int16_t data_s, int32_t data_l)
 {
-    // In MANUAL mode, ignore I2C motor commands (RC controls motor)
+    // In MANUAL or SEMI_AUTO mode, ignore I2C motor commands (RC controls motor)
     if (remote_control != nullptr && remote_control->isConnected())
     {
-        if (remote_control->getDriveMode() == RC_MODE_MANUAL)
+        uint8_t drive_mode = remote_control->getDriveMode();
+        if (drive_mode == RC_MODE_MANUAL || drive_mode == RC_MODE_SEMI_AUTO)
         {
-            // Ignore I2C motor command in MANUAL mode
+            // Ignore I2C motor command in MANUAL and SEMI_AUTO modes
             return;
         }
     }
@@ -601,13 +602,13 @@ void onMotor1Command(uint8_t mode, int16_t data_s, int32_t data_l)
 
 void onServo1Command(int8_t angle)
 {
-    // In MANUAL or SEMI_AUTO mode, ignore I2C servo commands (RC controls servo)
+    // In MANUAL mode, ignore I2C servo commands (RC controls servo)
     if (remote_control != nullptr && remote_control->isConnected())
     {
         uint8_t drive_mode = remote_control->getDriveMode();
-        if (drive_mode == RC_MODE_MANUAL || drive_mode == RC_MODE_SEMI_AUTO)
+        if (drive_mode == RC_MODE_MANUAL)
         {
-            // Ignore I2C servo command in MANUAL and SEMI_AUTO modes
+            // Ignore I2C servo command in MANUAL mode only
             return;
         }
     }
