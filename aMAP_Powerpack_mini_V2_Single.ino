@@ -34,11 +34,11 @@
 #define MOTOR1_REVERSE false    // true: reverse motor direction, false: normal
 
 // Encoder calibration (adjust these values for your robot)
-// 1m 당 pulse 수 - 실험 데이터 기반 (20cm 이동 ≈ 2300 펄스)
-#define m_1_pulse 11500
+// 1m 당 pulse 수 - 실험 데이터 기반 (20cm 실제 이동 = 3320 펄스)
+#define m_1_pulse 16600
 
 // pulse 당 m - 실험 데이터 기반
-#define pulse_1_m 1. / 11500.
+#define pulse_1_m 1. / 16600.
 
 // Speed control frequency: 50Hz (20ms period)
 #define SPEED_CONTROL_FREQ_HZ 50
@@ -57,9 +57,9 @@
 #define MOTOR1_SPEED_KD 7.0 // Derivative gain
 
 // Motor Position Control PID
-#define MOTOR1_POS_KP 0.1  // Proportional gain
+#define MOTOR1_POS_KP 0.08 // Proportional gain (reduced to decrease overshoot)
 #define MOTOR1_POS_KI 0.03 // Integral gain
-#define MOTOR1_POS_KD 0.7  // Derivative gain
+#define MOTOR1_POS_KD 1.0  // Derivative gain (increased for better damping)
 
 // ============================================================================
 // Watchdog Configuration
@@ -551,6 +551,16 @@ void setMotorControl(MotorControl *motor_ctrl, SemaphoreHandle_t semaphore, PIDC
             motor_ctrl->target_position = (int32_t)((float)data_l * pulse_per_m / 1000.0);
             posPID.reset();
         }
+        else if (mode == I2C_MODE_POSITION_REL)
+        {
+            // Relative position mode: add to current position
+            motor_ctrl->mode = MODE_POSITION_CONTROL;
+            int32_t relative_mm = data_l;
+            int32_t relative_pulse = (int32_t)((float)relative_mm * pulse_per_m / 1000.0);
+            motor_ctrl->target_position = motor_ctrl->current_position + relative_pulse;
+            motor_ctrl->target_position_mm = (int32_t)((float)motor_ctrl->target_position * 1000.0 / pulse_per_m);
+            posPID.reset();
+        }
         xSemaphoreGive(semaphore);
     }
 }
@@ -575,12 +585,33 @@ void initializeI2C()
 
 void onMotor1Command(uint8_t mode, int16_t data_s, int32_t data_l)
 {
+    // In MANUAL mode, ignore I2C motor commands (RC controls motor)
+    if (remote_control != nullptr && remote_control->isConnected())
+    {
+        if (remote_control->getDriveMode() == RC_MODE_MANUAL)
+        {
+            // Ignore I2C motor command in MANUAL mode
+            return;
+        }
+    }
+
     setMotorControl(&motor1_ctrl, xMotor1Semaphore, motor1SpeedPID, motor1PositionPID, motor1_speed_control, mode,
                     data_s, data_l, m_1_pulse);
 }
 
 void onServo1Command(int8_t angle)
 {
+    // In MANUAL or SEMI_AUTO mode, ignore I2C servo commands (RC controls servo)
+    if (remote_control != nullptr && remote_control->isConnected())
+    {
+        uint8_t drive_mode = remote_control->getDriveMode();
+        if (drive_mode == RC_MODE_MANUAL || drive_mode == RC_MODE_SEMI_AUTO)
+        {
+            // Ignore I2C servo command in MANUAL and SEMI_AUTO modes
+            return;
+        }
+    }
+
     // Input range: -SERVO1_ANGLE_LIMIT to +SERVO1_ANGLE_LIMIT degrees
     // Output: SERVO1_NEUTRAL ± angle
     int8_t constrained_angle = constrain(angle, -SERVO1_ANGLE_LIMIT, SERVO1_ANGLE_LIMIT);

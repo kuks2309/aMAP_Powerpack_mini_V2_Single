@@ -143,9 +143,9 @@ void I2CComm_Single::onReceive(int numBytes)
                     data_s = (Wire.read() << 8) | Wire.read();
                 }
             }
-            else if (mode == I2C_MODE_POSITION)
+            else if (mode == I2C_MODE_POSITION || mode == I2C_MODE_POSITION_REL)
             {
-                // Position mode: 4 bytes
+                // Position mode (Absolute or Relative): 4 bytes
                 if (numBytes >= 6) // cmd(1) + mode(1) + data(4)
                 {
                     data_l = ((int32_t)Wire.read() << 24) | ((int32_t)Wire.read() << 16) |

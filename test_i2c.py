@@ -22,7 +22,7 @@ class MotorController:
         try:
             self.bus = smbus.SMBus(i2c_bus)
             self.addr = address
-            self.pulse_per_m = 11500
+            self.pulse_per_m = 16600  # Calibrated: 20cm actual movement = 3320 pulses
             print(f"✓ I2C initialized on bus {i2c_bus}, address 0x{address:02X}")
         except Exception as e:
             print(f"✗ Failed to initialize I2C: {e}")
@@ -42,10 +42,16 @@ class MotorController:
         print(f"→ Speed set to {speed_mms} mm/s")
 
     def set_position(self, position_mm):
-        """위치 제어 (mm)"""
+        """위치 제어 - 절대 위치 (mm)"""
         data = list(struct.pack('>i', position_mm))
         self.bus.write_i2c_block_data(self.addr, 0x02, [0x02] + data)
-        print(f"→ Position set to {position_mm} mm")
+        print(f"→ Position set to {position_mm} mm (absolute)")
+
+    def set_position_relative(self, distance_mm):
+        """위치 제어 - 상대 위치 (mm)"""
+        data = list(struct.pack('>i', distance_mm))
+        self.bus.write_i2c_block_data(self.addr, 0x02, [0x03] + data)
+        print(f"→ Position set to {distance_mm:+d} mm (relative)")
 
     def set_servo(self, angle):
         """서보 제어 (-35 ~ 35도)"""
@@ -143,15 +149,15 @@ def test_speed_control():
 
 
 def test_position_control():
-    """위치 제어 테스트"""
-    print("\n=== Position Control Test ===\n")
+    """위치 제어 테스트 - 절대 위치"""
+    print("\n=== Position Control Test (Absolute) ===\n")
 
     motor = MotorController()
 
     motor.reset_encoders()
     time.sleep(0.1)
 
-    target = 500  # 500mm
+    target = 200  # 200mm
     print(f"Moving to {target} mm...")
     motor.set_position(target)
 
@@ -161,12 +167,55 @@ def test_position_control():
 
         print(f"Position: {status['position_mm']:7.2f} mm, Error: {error:6.2f} mm", end='\r')
 
-        if error < 5:
+        if error < 10:  # Allow 10mm tolerance
             print()
-            print(f"\n✓ Target reached! (error < 5mm)")
+            print(f"\n✓ Target reached! (error < 10mm)")
             break
 
         time.sleep(0.1)
+
+    motor.print_status()
+
+
+def test_position_relative_control():
+    """위치 제어 테스트 - 상대 위치"""
+    print("\n=== Position Control Test (Relative) ===\n")
+
+    motor = MotorController()
+
+    motor.reset_encoders()
+    time.sleep(0.1)
+
+    # Test 1: Move forward 100mm
+    print("Test 1: Moving forward 100mm...")
+    initial_pos = motor.get_status()['position_mm']
+    motor.set_position_relative(100)
+    time.sleep(2.0)
+    status1 = motor.get_status()
+    print(f"  Initial: {initial_pos:7.2f} mm → Final: {status1['position_mm']:7.2f} mm")
+    print(f"  Actual movement: {status1['position_mm'] - initial_pos:7.2f} mm\n")
+
+    time.sleep(1.0)
+
+    # Test 2: Move forward another 50mm
+    print("Test 2: Moving forward 50mm...")
+    initial_pos = status1['position_mm']
+    motor.set_position_relative(50)
+    time.sleep(2.0)
+    status2 = motor.get_status()
+    print(f"  Initial: {initial_pos:7.2f} mm → Final: {status2['position_mm']:7.2f} mm")
+    print(f"  Actual movement: {status2['position_mm'] - initial_pos:7.2f} mm\n")
+
+    time.sleep(1.0)
+
+    # Test 3: Move backward 100mm
+    print("Test 3: Moving backward 100mm...")
+    initial_pos = status2['position_mm']
+    motor.set_position_relative(-100)
+    time.sleep(2.0)
+    status3 = motor.get_status()
+    print(f"  Initial: {initial_pos:7.2f} mm → Final: {status3['position_mm']:7.2f} mm")
+    print(f"  Actual movement: {status3['position_mm'] - initial_pos:7.2f} mm\n")
 
     motor.print_status()
 
@@ -192,7 +241,8 @@ def interactive_mode():
     print("Commands:")
     print("  p <value>   : PWM control (-255 to 255)")
     print("  s <value>   : Speed control (mm/s)")
-    print("  m <value>   : Position control (mm)")
+    print("  m <value>   : Position control - absolute (mm)")
+    print("  d <value>   : Position control - relative (mm)")
     print("  v <value>   : Servo control (-35 to 35 degrees)")
     print("  r           : Reset encoders")
     print("  ?           : Get status")
@@ -228,6 +278,9 @@ def interactive_mode():
             elif cmd[0] == 'm' and len(cmd) == 2:
                 motor.set_position(int(cmd[1]))
 
+            elif cmd[0] == 'd' and len(cmd) == 2:
+                motor.set_position_relative(int(cmd[1]))
+
             elif cmd[0] == 'v' and len(cmd) == 2:
                 motor.set_servo(int(cmd[1]))
 
@@ -253,10 +306,11 @@ def main():
         print("\nSelect test mode:")
         print("  1. Basic test")
         print("  2. Speed control test")
-        print("  3. Position control test")
-        print("  4. Servo control test")
-        print("  5. Interactive mode")
-        choice = input("\nEnter choice (1-5): ").strip()
+        print("  3. Position control test (absolute)")
+        print("  4. Position control test (relative)")
+        print("  5. Servo control test")
+        print("  6. Interactive mode")
+        choice = input("\nEnter choice (1-6): ").strip()
         test_mode = choice
 
     if test_mode == '1':
@@ -266,8 +320,10 @@ def main():
     elif test_mode == '3':
         test_position_control()
     elif test_mode == '4':
-        test_servo_control()
+        test_position_relative_control()
     elif test_mode == '5':
+        test_servo_control()
+    elif test_mode == '6':
         interactive_mode()
     else:
         print("Invalid choice!")

@@ -47,8 +47,8 @@ def parse_status(data):
     speed = struct.unpack('>h', bytes(data[4:6]))[0]
     mode = data[6]
 
-    # Convert units
-    pulse_per_m = 11500
+    # Convert units (Calibrated: 20cm actual movement = 3320 pulses)
+    pulse_per_m = 16600
     position_mm = position * 1000.0 / pulse_per_m
     speed_mms = speed * 50.0 * 1000.0 / pulse_per_m
 

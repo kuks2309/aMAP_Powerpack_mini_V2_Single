@@ -6,6 +6,22 @@
 - **데이터 형식**: Big Endian
 - **제어 주기**: 50Hz (20ms)
 
+## 제어 모드 (RC/I2C 우선순위)
+
+시스템은 SBUS 리모컨의 채널 6에서 읽은 스위치 위치에 따라 3가지 주행 모드를 지원합니다:
+
+| 모드 | 모터 제어 | 서보 제어 | I2C 명령 처리 |
+|------|----------|----------|--------------|
+| **MANUAL** (수동) | RC 조이스틱 | RC 조이스틱 | **모터/서보 명령 무시** |
+| **SEMI_AUTO** (반자동) | I2C (자율주행) | RC 조이스틱 | 모터 명령만 수신, **서보 명령 무시** |
+| **FULL_AUTO** (완전자동) | I2C (자율주행) | I2C (자율주행) | 모든 I2C 명령 수신 |
+
+**중요**:
+- MANUAL 모드에서는 모든 I2C 제어 명령(모터/서보)이 무시되고 조이스틱으로만 제어됩니다.
+- SEMI_AUTO 모드에서는 모터는 I2C로 제어되지만, 서보 I2C 명령은 무시되고 조이스틱으로만 제어됩니다.
+- FULL_AUTO 모드에서만 모든 I2C 제어가 가능합니다.
+- RC가 연결되지 않은 경우, 모든 I2C 명령이 정상적으로 처리됩니다.
+
 ---
 
 ## 명령어 체계
@@ -19,7 +35,8 @@
 |------|------|------------|------|
 | `0x00` PWM | 직접 PWM 제어 | `[0x02][0x00][PWM(2B)]`<br>범위: -255 ~ 255 (int16) | `[0x02][0x00][0x00][0x64]` = PWM 100 |
 | `0x01` Speed | 속도 PID 제어 | `[0x02][0x01][Speed(2B)]`<br>단위: mm/s (int16) | `[0x02][0x01][0x00][0x96]` = 150 mm/s |
-| `0x02` Position | 위치 PID 제어 | `[0x02][0x02][Position(4B)]`<br>단위: mm (int32) | `[0x02][0x02][0x00][0x00][0x03][0xE8]` = 1000 mm |
+| `0x02` Position | 위치 PID 제어 (절대) | `[0x02][0x02][Position(4B)]`<br>단위: mm (int32) | `[0x02][0x02][0x00][0x00][0x03][0xE8]` = 1000 mm |
+| `0x03` Position Relative | 위치 PID 제어 (상대) | `[0x02][0x03][Distance(4B)]`<br>단위: mm (int32) | `[0x02][0x03][0x00][0x00][0x00][0x64]` = +100 mm |
 
 #### 제어 모드 상세
 
@@ -39,15 +56,25 @@
 - 출력 제한: ±150
 - 사용 예: 일정 속도 주행
 
-##### Position 모드 (`0x02`)
+##### Position 모드 (`0x02`) - 절대 위치
 - PID 피드백 제어
 - 목표: mm 단위 절대 위치
 - **PID 게인**:
-  - Kp = 0.1
+  - Kp = 0.08
   - Ki = 0.03 (Integral limit = 1000)
-  - Kd = 0.7
+  - Kd = 1.0
 - 출력 제한: ±255
-- 사용 예: 특정 위치로 이동
+- 사용 예: 특정 위치로 이동 (예: 원점 기준 500mm)
+
+##### Position Relative 모드 (`0x03`) - 상대 위치
+- PID 피드백 제어
+- 목표: mm 단위 상대 이동 거리 (현재 위치 기준)
+- **PID 게인**: Position 모드와 동일
+  - Kp = 0.08
+  - Ki = 0.03 (Integral limit = 1000)
+  - Kd = 1.0
+- 출력 제한: ±255
+- 사용 예: 현재 위치에서 +100mm 이동, -50mm 이동
 
 ---
 
@@ -98,6 +125,8 @@
 | 4-5 | Speed | int16 | 현재 속도 (펄스/20ms, Big Endian) |
 | 6 | Mode | uint8 | 현재 모드 (0:PWM, 1:Speed, 2:Position) |
 
+**참고**: 상대 위치 모드(0x03)로 명령을 보내면 Arduino는 자동으로 절대 위치 제어(Mode 2)로 전환하여 계산된 목표 위치로 이동합니다.
+
 ---
 
 ## Python 예제 코드 (Jetson)
@@ -108,7 +137,7 @@ import smbus
 import struct
 import time
 
-bus = smbus.SMBus(1)  # I2C bus 1
+bus = smbus.SMBus(7)  # I2C bus 7 (Jetson Orin Nano)
 ADDR = 0x08
 ```
 
@@ -137,7 +166,7 @@ data = list(struct.pack('>h', speed))
 bus.write_i2c_block_data(ADDR, 0x02, [0x01] + data)
 ```
 
-### 3. 위치 제어
+### 3. 위치 제어 (절대)
 ```python
 # Motor1: 1000 mm 위치로 이동
 position = 1000
@@ -148,6 +177,19 @@ bus.write_i2c_block_data(ADDR, 0x02, [0x02] + data)
 position = -500
 data = list(struct.pack('>i', position))
 bus.write_i2c_block_data(ADDR, 0x02, [0x02] + data)
+```
+
+### 3-1. 위치 제어 (상대)
+```python
+# Motor1: 현재 위치에서 +100 mm 이동
+distance = 100
+data = list(struct.pack('>i', distance))
+bus.write_i2c_block_data(ADDR, 0x02, [0x03] + data)
+
+# Motor1: 현재 위치에서 -200 mm 이동 (후진)
+distance = -200
+data = list(struct.pack('>i', distance))
+bus.write_i2c_block_data(ADDR, 0x02, [0x03] + data)
 ```
 
 ### 4. 서보 제어
@@ -184,11 +226,11 @@ print(f"Speed: {speed} pulses/20ms")
 print(f"Mode: {mode} (0:PWM, 1:Speed, 2:Position)")
 
 # 위치를 mm로 변환
-position_mm = position * 1000.0 / 11500.0
+position_mm = position * 1000.0 / 16600.0
 print(f"Position: {position_mm:.2f} mm")
 
 # 속도를 mm/s로 변환
-speed_mms = speed * 50.0 * 1000.0 / 11500.0
+speed_mms = speed * 50.0 * 1000.0 / 16600.0
 print(f"Speed: {speed_mms:.2f} mm/s")
 ```
 
@@ -201,10 +243,10 @@ print("Encoders reset to 0")
 ### 7. 통합 제어 클래스
 ```python
 class MotorController:
-    def __init__(self, i2c_bus=1, address=0x08):
+    def __init__(self, i2c_bus=7, address=0x08):
         self.bus = smbus.SMBus(i2c_bus)
         self.addr = address
-        self.pulse_per_m = 11500
+        self.pulse_per_m = 16600  # Calibrated: 20cm = 3320 pulses
 
     def set_pwm(self, pwm):
         """PWM 제어 (-255 ~ 255)"""
@@ -218,9 +260,14 @@ class MotorController:
         self.bus.write_i2c_block_data(self.addr, 0x02, [0x01] + data)
 
     def set_position(self, position_mm):
-        """위치 제어 (mm)"""
+        """위치 제어 - 절대 (mm)"""
         data = list(struct.pack('>i', position_mm))
         self.bus.write_i2c_block_data(self.addr, 0x02, [0x02] + data)
+
+    def set_position_relative(self, distance_mm):
+        """위치 제어 - 상대 (mm)"""
+        data = list(struct.pack('>i', distance_mm))
+        self.bus.write_i2c_block_data(self.addr, 0x02, [0x03] + data)
 
     def set_servo(self, angle):
         """서보 제어 (-35 ~ 35도)"""
@@ -264,8 +311,11 @@ motor.set_pwm(100)
 # 속도 제어
 motor.set_speed(150)  # 150 mm/s
 
-# 위치 제어
-motor.set_position(1000)  # 1000 mm
+# 위치 제어 (절대)
+motor.set_position(1000)  # 1000 mm 위치로 이동
+
+# 위치 제어 (상대)
+motor.set_position_relative(100)  # 현재 위치에서 +100 mm 이동
 
 # 서보 제어
 motor.set_servo(20)  # +20도
@@ -283,8 +333,8 @@ motor.reset_encoders()
 ## 하드웨어 사양
 
 ### 엔코더 캘리브레이션
-- **1m당 펄스**: 11,500 pulses
-- **1 펄스당 거리**: 0.087 mm (1/11500 m)
+- **1m당 펄스**: 16,600 pulses (실측: 20cm = 3320 pulses)
+- **1 펄스당 거리**: 0.060 mm (1/16600 m)
 - **제어 주기**: 50Hz (20ms)
 - **엔코더 타입**: LS7166 (SPI 인터페이스)
 
@@ -339,14 +389,14 @@ motor.reset_encoders()
 
 ### 위치 변환
 ```
-펄스 → mm:  position_mm = position_pulse × (1000 / 11500)
-mm → 펄스:  position_pulse = position_mm × (11500 / 1000)
+펄스 → mm:  position_mm = position_pulse × (1000 / 16600)
+mm → 펄스:  position_pulse = position_mm × (16600 / 1000)
 ```
 
 ### 속도 변환
 ```
-펄스/20ms → mm/s:  speed_mms = speed_pulse × 50 × (1000 / 11500)
-mm/s → 펄스/20ms:  speed_pulse = speed_mms × (11500 / 1000) / 50
+펄스/20ms → mm/s:  speed_mms = speed_pulse × 50 × (1000 / 16600)
+mm/s → 펄스/20ms:  speed_pulse = speed_mms × (16600 / 1000) / 50
 ```
 
 ---
@@ -406,7 +456,7 @@ status = motor.get_status()
 print(f"이동 거리: {status['position_mm']:.2f} mm")
 ```
 
-### 2. 특정 거리 이동
+### 2. 특정 거리 이동 (절대 위치)
 ```python
 # 위치 제어로 500mm 이동
 motor.reset_encoders()
@@ -425,6 +475,30 @@ while True:
 
 print("목표 도달!")
 motor.set_speed(0)  # PWM 모드로 정지
+```
+
+### 2-1. 증분 이동 (상대 위치)
+```python
+# 상대 위치 제어로 단계적 이동
+motor.reset_encoders()
+
+# 1단계: 앞으로 100mm 이동
+motor.set_position_relative(100)
+time.sleep(2.0)
+status = motor.get_status()
+print(f"1단계 완료: {status['position_mm']:.2f} mm")
+
+# 2단계: 추가로 앞으로 50mm 이동
+motor.set_position_relative(50)
+time.sleep(2.0)
+status = motor.get_status()
+print(f"2단계 완료: {status['position_mm']:.2f} mm")
+
+# 3단계: 뒤로 100mm 이동
+motor.set_position_relative(-100)
+time.sleep(2.0)
+status = motor.get_status()
+print(f"3단계 완료: {status['position_mm']:.2f} mm")
 ```
 
 ### 3. 서보 스캔
